@@ -1,0 +1,477 @@
+import { useState, useEffect } from "react";
+
+// ─── MENÚ ─────────────────────────────────────────────────────────────────────
+const MENU = [
+  { grupo:"🍕 Pizzas",       color:"#c0392b", items:["Napo","Especial","Fugazeta","Muzarella"] },
+  { grupo:"🍔 Hamburguesas", color:"#b8621a", items:["Completa","Con cheddar","Simple","Lechuga y tomate","J y Q","Sola"] },
+  { grupo:"🍟 Papas",        color:"#8a6d00", items:["Solas","Con cheddar"] },
+];
+
+// ─── STORAGE ──────────────────────────────────────────────────────────────────
+const KEY     = "comandas_v5";
+const KEY_HIS = "comandas_historial_v5";
+
+function load()    { try { return JSON.parse(localStorage.getItem(KEY))     || { ordenes:[], contador:0 }; } catch { return { ordenes:[], contador:0 }; } }
+function loadHis() { try { return JSON.parse(localStorage.getItem(KEY_HIS)) || []; }                        catch { return []; } }
+function save(st)  { try { localStorage.setItem(KEY, JSON.stringify(st)); }     catch {} }
+function saveHis(h){ try { localStorage.setItem(KEY_HIS, JSON.stringify(h)); }  catch {} }
+
+// ─── UTILS ────────────────────────────────────────────────────────────────────
+function mins(ts) { return Math.floor((Date.now()-ts)/60000); }
+function hora(ts) { return new Date(ts).toLocaleTimeString("es-AR",{hour:"2-digit",minute:"2-digit"}); }
+function fechaCorta(ts) { return new Date(ts).toLocaleDateString("es-AR",{day:"2-digit",month:"2-digit",year:"numeric"}); }
+function hexAlpha(hex,a){ const r=parseInt(hex.slice(1,3),16),g=parseInt(hex.slice(3,5),16),b=parseInt(hex.slice(5,7),16); return `rgba(${r},${g},${b},${a})`; }
+
+// ─── ROOT ─────────────────────────────────────────────────────────────────────
+export default function App() {
+  const [vista, setVista]       = useState("main"); // main | cocina | historial
+  const [state, setState]       = useState(load);
+  const [historial, setHistorial] = useState(loadHis);
+
+  useEffect(() => {
+    const iv = setInterval(() => setState(load()), 3000);
+    return () => clearInterval(iv);
+  }, []);
+
+  const mutate = (fn) => setState(prev => { const next=fn(prev); save(next); return next; });
+
+  // ── Crear orden ──
+  const crearOrden = (lineas) => {
+    mutate(s => {
+      const num=s.contador+1, ts=Date.now();
+      return {
+        ordenes: [...s.ordenes, {
+          id:num, ts,
+          lineas: lineas.map((l,i) => ({ lid:`${num}-${i}`, nombre:l.nombre, grupo:l.grupo, qty:l.qty, estado:"nuevo", entregado:false, updatedAt:ts }))
+        }],
+        contador: num,
+      };
+    });
+  };
+
+  // ── Cambiar estado de línea (cocina) ──
+  const cambiarLinea = (lid, nuevoEstado) => {
+    mutate(s => ({
+      ...s,
+      ordenes: s.ordenes.map(o => ({
+        ...o,
+        lineas: o.lineas.map(l => l.lid===lid ? {...l, estado:nuevoEstado, updatedAt:Date.now()} : l)
+      }))
+    }));
+  };
+
+  // ── Marcar línea como entregada (queda visible, luego desaparece cuando todas entregadas) ──
+  const entregarLinea = (lid) => {
+    mutate(s => {
+      const ordenes = s.ordenes.map(o => ({
+        ...o,
+        lineas: o.lineas.map(l => l.lid===lid ? {...l, entregado:true, updatedAt:Date.now()} : l)
+      }));
+
+      // Si toda la orden está entregada → archivar al historial y sacar
+      const orden = ordenes.find(o => o.lineas.some(l => l.lid===lid));
+      if (orden && orden.lineas.every(l => l.entregado)) {
+        const archivar = { ...orden, cerradoAt: Date.now() };
+        setHistorial(prev => {
+          const next = [...prev, archivar];
+          saveHis(next);
+          return next;
+        });
+        return { ...s, ordenes: ordenes.filter(o => o.id!==orden.id) };
+      }
+      return { ...s, ordenes };
+    });
+  };
+
+  // ── Borrar historial ──
+  const borrarHistorial = () => {
+    setHistorial([]);
+    saveHis([]);
+  };
+
+  if (vista==="cocina")
+    return <VistaCocina onBack={()=>setVista("main")} ordenes={state.ordenes} onCambiar={cambiarLinea} />;
+  if (vista==="historial")
+    return <VistaHistorial onBack={()=>setVista("main")} historial={historial} onBorrar={borrarHistorial} />;
+
+  return <VistaPrincipal state={state} onCrear={crearOrden} onEntregarLinea={entregarLinea} onIrCocina={()=>setVista("cocina")} onIrHistorial={()=>setVista("historial")} historialCount={historial.length} />;
+}
+
+// ─── VISTA PRINCIPAL ──────────────────────────────────────────────────────────
+function VistaPrincipal({ state, onCrear, onEntregarLinea, onIrCocina, onIrHistorial, historialCount }) {
+  const [carrito, setCarrito] = useState([]);
+  const [flash, setFlash]     = useState(false);
+
+  const add = (nombre, grupo) => setCarrito(prev => {
+    const ex=prev.find(x=>x.nombre===nombre);
+    if (ex) return prev.map(x=>x.nombre===nombre?{...x,qty:x.qty+1}:x);
+    return [...prev,{nombre,grupo,qty:1}];
+  });
+  const setQty = (nombre,delta) => setCarrito(prev=>prev.map(x=>x.nombre===nombre?{...x,qty:x.qty+delta}:x).filter(x=>x.qty>0));
+
+  const enviar = () => {
+    if (!carrito.length) return;
+    onCrear(carrito);
+    setCarrito([]);
+    setFlash(true);
+    setTimeout(()=>setFlash(false), 1400);
+  };
+
+  const total   = carrito.reduce((a,b)=>a+b.qty,0);
+  const nActivas = state.ordenes.length;
+
+  return (
+    <div style={s.root}>
+      {/* TOPBAR */}
+      <div style={s.topbar}>
+        <span style={s.topbarTitle}>🍻 Comandas</span>
+        <div style={{display:"flex",gap:8}}>
+          <button style={s.cocinaBtn} onClick={onIrCocina}>
+            🍳 Cocina
+            {nActivas>0 && <span style={s.cocinaBadge}>{nActivas}</span>}
+          </button>
+          <button style={s.historialBtn} onClick={onIrHistorial}>
+            📒 Noche
+            {historialCount>0 && <span style={{...s.cocinaBadge,color:"#2471a3"}}>{historialCount}</span>}
+          </button>
+        </div>
+      </div>
+
+      <div style={s.layout}>
+        {/* ══ IZQUIERDA: MENÚ ══ */}
+        <div style={s.colLeft}>
+          {flash && <div style={s.flashBanner}>✅ Pedido enviado a cocina</div>}
+
+          {MENU.map(grupo=>(
+            <div key={grupo.grupo} style={s.grupoWrap}>
+              <div style={{...s.grupoTitulo,color:grupo.color}}>{grupo.grupo}</div>
+              <div style={s.grupoGrid}>
+                {grupo.items.map(item=>{
+                  const en=carrito.find(x=>x.nombre===item);
+                  return (
+                    <button key={item} onClick={()=>add(item,grupo.grupo)} style={{
+                      ...s.itemBtn,
+                      borderColor: en?grupo.color:"#2a2a2a",
+                      backgroundColor: en?hexAlpha(grupo.color,0.2):"#1a1a1a",
+                    }}>
+                      <span style={s.itemLabel}>{item}</span>
+                      {en && <span style={{...s.itemBadge,backgroundColor:grupo.color}}>×{en.qty}</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+
+          {carrito.length>0 && (
+            <div style={s.carritoBox}>
+              <div style={s.carritoTitle}>🛒 Pedido actual — {total} ítem{total>1?"s":""}</div>
+              {carrito.map(x=>(
+                <div key={x.nombre} style={s.carritoRow}>
+                  <span style={s.carritoNombre}>{x.nombre}</span>
+                  <div style={s.qRow}>
+                    <button style={s.qBtn} onClick={()=>setQty(x.nombre,-1)}>−</button>
+                    <span style={s.qNum}>{x.qty}</span>
+                    <button style={s.qBtn} onClick={()=>setQty(x.nombre,+1)}>+</button>
+                  </div>
+                </div>
+              ))}
+              <button style={s.btnEnviar} onClick={enviar}>🚀 Mandar a cocina</button>
+            </div>
+          )}
+        </div>
+
+        {/* ══ DERECHA: RESUMEN ACTIVO ══ */}
+        <div style={s.colRight}>
+          <div style={s.resumenHeader}>
+            <span style={s.resumenHeaderTitle}>📋 Órdenes activas</span>
+            {nActivas>0 && <span style={s.resumenHeaderCount}>{nActivas}</span>}
+          </div>
+
+          {nActivas===0 && <div style={s.resumenEmpty}>Sin órdenes</div>}
+
+          {state.ordenes.map(o=>(
+            <ResumenCard key={o.id} orden={o} onEntregarLinea={onEntregarLinea} />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── TARJETA RESUMEN ──────────────────────────────────────────────────────────
+function ResumenCard({ orden, onEntregarLinea }) {
+  const m       = mins(orden.ts);
+  const urgente = m>=10 && orden.lineas.some(l=>!l.entregado);
+  const colores = { nuevo:"#e74c3c", preparando:"#f39c12", listo:"#2ecc71" };
+  const labels  = { nuevo:"Pendiente", preparando:"Prep.", listo:"Listo" };
+
+  return (
+    <div style={{
+      ...s.rCard,
+      borderColor: urgente?"#c0392b": orden.lineas.some(l=>l.estado==="listo"&&!l.entregado)?"#1e6b3a":"#252525",
+    }}>
+      <div style={s.rCardHead}>
+        <span style={s.rCardNum}>#{orden.id}</span>
+        <span style={{...s.rCardMins, color:urgente?"#e74c3c":"#555"}}>
+          {urgente?"⚠️ ":""}{m} min · {hora(orden.ts)}
+        </span>
+      </div>
+
+      {orden.lineas.map(l=>{
+        const entregado = l.entregado;
+        return (
+          <div key={l.lid} style={{
+            ...s.rLinea,
+            backgroundColor: entregado?"#111": l.estado==="listo"?"#0f2018":"#1a1a1a",
+            opacity: entregado?0.45:1,
+          }}>
+            <div style={{display:"flex",flexDirection:"column",gap:2,flex:1}}>
+              {l.grupo && <span style={{fontSize:9,fontWeight:700,letterSpacing:0.5,color:entregado?"#555":colores[l.estado],textTransform:"uppercase"}}>{l.grupo}</span>}
+              <span style={{
+                ...s.rLineaNombre,
+                color: entregado?"#555":"#ccc",
+                textDecoration: entregado?"line-through":"none",
+              }}>
+                {l.qty>1?`×${l.qty} `:""}{l.nombre}
+              </span>
+            </div>
+
+            {entregado
+              ? <span style={s.entregadoTag}>✓ Entregado</span>
+              : l.estado==="listo"
+                ? <button style={s.btnEntregarLinea} onClick={()=>onEntregarLinea(l.lid)}>✓ Entregar</button>
+                : <span style={{...s.rLineaTag,color:colores[l.estado],borderColor:colores[l.estado]}}>{labels[l.estado]}</span>
+            }
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── VISTA COCINA ─────────────────────────────────────────────────────────────
+function VistaCocina({ onBack, ordenes, onCambiar }) {
+  const activas = ordenes.filter(o=>o.lineas.some(l=>l.estado!=="listo"&&!l.entregado));
+  return (
+    <div style={s.kitchenPage}>
+      <div style={s.kitchenBar}>
+        <button style={s.backWhite} onClick={onBack}>← Volver</button>
+        <span style={s.kitchenBarTitle}>🍳 COCINA</span>
+        <span style={s.kitchenBadge}>{activas.length} orden{activas.length!==1?"es":""}</span>
+      </div>
+      {activas.length===0 && (
+        <div style={s.emptyPage}><div style={{fontSize:56}}>😴</div><div style={{color:"#555",marginTop:12,fontSize:18}}>Sin pedidos</div></div>
+      )}
+      <div style={s.kitchenGrid}>
+        {activas.map(orden=><OrdenCard key={orden.id} orden={orden} onCambiar={onCambiar} />)}
+      </div>
+    </div>
+  );
+}
+
+function OrdenCard({ orden, onCambiar }) {
+  const m=mins(orden.ts);
+  const urgente=m>=10;
+  const todasListas=orden.lineas.filter(l=>!l.entregado).every(l=>l.estado==="listo");
+  const lineasPendientes=orden.lineas.filter(l=>!l.entregado);
+
+  return (
+    <div style={{
+      ...s.ordenCard,
+      borderColor: urgente?"#c0392b":todasListas?"#27ae60":"#2e2e2e",
+      boxShadow: urgente&&!todasListas?"0 0 0 2px #c0392b55":"none",
+    }}>
+      <div style={s.ordenHeader}>
+        <span style={s.ordenNum}>Orden #{orden.id}</span>
+        <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:2}}>
+          <span style={{...s.ordenMins,color:urgente&&!todasListas?"#e74c3c":"#777"}}>
+            {urgente&&!todasListas?"⚠️ ":"⏱️ "}{m} min
+          </span>
+          <span style={s.ordenHora}>{hora(orden.ts)}</span>
+        </div>
+      </div>
+      <div style={s.lineasWrap}>
+        {lineasPendientes.map(linea=><LineaItem key={linea.lid} linea={linea} onCambiar={onCambiar}/>)}
+      </div>
+    </div>
+  );
+}
+
+function LineaItem({ linea, onCambiar }) {
+  const cfg={
+    nuevo:      {next:"preparando",btnLabel:"Iniciar",  btnColor:"#b8621a",bg:"#1e1e1e",dot:"#c0392b",txt:"#aaa"},
+    preparando: {next:"listo",     btnLabel:"→ Listo",  btnColor:"#1e6b3a",bg:"#1a2510",dot:"#f39c12",txt:"#8fcf57"},
+    listo:      {next:null,        btnLabel:null,        btnColor:null,     bg:"#0f2018",dot:"#2ecc71",txt:"#2ecc71"},
+  }[linea.estado];
+  return (
+    <div style={{...s.lineaRow,backgroundColor:cfg.bg}}>
+      <div style={{display:"flex",alignItems:"center",gap:8,flex:1}}>
+        <span style={{...s.lineaDot,backgroundColor:cfg.dot}}/>
+        <div style={{display:"flex",flexDirection:"column",gap:2}}>
+          {linea.grupo&&<span style={{...s.lineaGrupo,color:cfg.dot}}>{linea.grupo}</span>}
+          <span style={{...s.lineaNombre,color:cfg.txt}}>
+            {linea.qty>1&&<span style={s.lineaQty}>×{linea.qty} </span>}
+            {linea.nombre}
+          </span>
+        </div>
+      </div>
+      {cfg.next
+        ?<button style={{...s.lineaBtn,backgroundColor:cfg.btnColor}} onClick={()=>onCambiar(linea.lid,cfg.next)}>{cfg.btnLabel}</button>
+        :<span style={{color:"#2ecc71",fontSize:18,paddingRight:4}}>✓</span>
+      }
+    </div>
+  );
+}
+
+// ─── VISTA HISTORIAL ──────────────────────────────────────────────────────────
+function VistaHistorial({ onBack, historial, onBorrar }) {
+  const [confirmar, setConfirmar] = useState(false);
+
+  // Agrupar por fecha
+  const porFecha = historial.reduce((acc, o) => {
+    const f=fechaCorta(o.ts);
+    if (!acc[f]) acc[f]=[];
+    acc[f].push(o);
+    return acc;
+  }, {});
+
+  const totalItems = historial.reduce((a,o)=>a+o.lineas.reduce((b,l)=>b+l.qty,0),0);
+
+  return (
+    <div style={s.histPage}>
+      <div style={s.histBar}>
+        <button style={s.backWhite} onClick={onBack}>← Volver</button>
+        <span style={s.histBarTitle}>📒 Resumen de la noche</span>
+        {historial.length>0 && (
+          confirmar
+            ? <div style={{display:"flex",gap:8}}>
+                <button style={{...s.btnBorrar,backgroundColor:"#888"}} onClick={()=>setConfirmar(false)}>Cancelar</button>
+                <button style={s.btnBorrar} onClick={()=>{onBorrar();setConfirmar(false);}}>Sí, borrar todo</button>
+              </div>
+            : <button style={s.btnBorrar} onClick={()=>setConfirmar(true)}>🗑 Borrar noche</button>
+        )}
+      </div>
+
+      {historial.length===0 && (
+        <div style={s.emptyPage}>
+          <div style={{fontSize:56}}>📭</div>
+          <div style={{color:"#555",marginTop:12,fontSize:16}}>Todavía no hay órdenes cerradas esta noche</div>
+        </div>
+      )}
+
+      {historial.length>0 && (
+        <div style={s.histResumen}>
+          <span style={s.histResumenItem}><span style={s.histResumenNum}>{historial.length}</span> órdenes</span>
+          <span style={s.histResumenItem}><span style={s.histResumenNum}>{totalItems}</span> ítems entregados</span>
+        </div>
+      )}
+
+      {Object.entries(porFecha).map(([fecha, ordenes])=>(
+        <div key={fecha}>
+          <div style={s.histFecha}>{fecha}</div>
+          {ordenes.map(o=>(
+            <div key={o.id} style={s.histCard}>
+              <div style={s.histCardHead}>
+                <span style={s.histCardNum}>Orden #{o.id}</span>
+                <span style={s.histCardHora}>{hora(o.ts)} → {hora(o.cerradoAt)}</span>
+              </div>
+              {o.lineas.map((l,i)=>(
+                <div key={i} style={s.histLinea}>
+                  <span style={s.histLineaGrupo}>{l.grupo}</span>
+                  <span style={s.histLineaNombre}>{l.qty>1?`×${l.qty} `:""}{l.nombre}</span>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── ESTILOS ──────────────────────────────────────────────────────────────────
+const s = {
+  root: { minHeight:"100vh", backgroundColor:"#111", fontFamily:"'Segoe UI',system-ui,sans-serif", color:"#fff" },
+
+  topbar: { display:"flex", alignItems:"center", justifyContent:"space-between", padding:"12px 20px", backgroundColor:"#161616", borderBottom:"1px solid #252525", position:"sticky", top:0, zIndex:20 },
+  topbarTitle: { fontWeight:900, fontSize:20, letterSpacing:-0.5 },
+  cocinaBtn:   { display:"flex", alignItems:"center", gap:8, backgroundColor:"#c0392b", border:"none", color:"#fff", borderRadius:10, padding:"9px 18px", fontWeight:700, fontSize:14, cursor:"pointer" },
+  historialBtn:{ display:"flex", alignItems:"center", gap:8, backgroundColor:"#1a2e42", border:"none", color:"#fff", borderRadius:10, padding:"9px 18px", fontWeight:700, fontSize:14, cursor:"pointer" },
+  cocinaBadge: { backgroundColor:"#fff", borderRadius:999, fontSize:11, fontWeight:900, padding:"1px 7px", lineHeight:1.4 },
+
+  layout: { display:"grid", gridTemplateColumns:"1fr 340px", alignItems:"start", minHeight:"calc(100vh - 53px)" },
+  colLeft: { padding:"16px 20px 120px", borderRight:"1px solid #1e1e1e" },
+
+  flashBanner: { backgroundColor:"#1a3a1a", border:"1px solid #27ae60", color:"#2ecc71", borderRadius:10, padding:"10px 16px", fontWeight:700, fontSize:14, marginBottom:16, textAlign:"center" },
+
+  grupoWrap:   { marginBottom:20 },
+  grupoTitulo: { fontWeight:800, fontSize:17, marginBottom:10, letterSpacing:-0.3 },
+  grupoGrid:   { display:"flex", flexWrap:"wrap", gap:8 },
+  itemBtn:     { position:"relative", border:"2px solid", borderRadius:10, padding:"10px 16px", cursor:"pointer", transition:"all 0.1s", display:"flex", alignItems:"center", gap:8, background:"none" },
+  itemLabel:   { color:"#ddd", fontWeight:600, fontSize:14 },
+  itemBadge:   { color:"#fff", borderRadius:999, fontSize:11, fontWeight:700, padding:"2px 7px" },
+
+  carritoBox:   { marginTop:20, backgroundColor:"#181818", border:"2px solid #2e2e2e", borderRadius:12, padding:16, display:"flex", flexDirection:"column", gap:10 },
+  carritoTitle: { color:"#fff", fontWeight:700, fontSize:14 },
+  carritoRow:   { display:"flex", justifyContent:"space-between", alignItems:"center", backgroundColor:"#222", borderRadius:8, padding:"9px 12px" },
+  carritoNombre:{ color:"#ddd", fontSize:14, fontWeight:600 },
+  qRow:         { display:"flex", alignItems:"center", gap:8 },
+  qBtn:         { backgroundColor:"#333", border:"none", color:"#fff", borderRadius:7, width:28, height:28, cursor:"pointer", fontSize:17, fontWeight:700 },
+  qNum:         { color:"#fff", fontWeight:800, minWidth:20, textAlign:"center", fontSize:15 },
+  btnEnviar:    { backgroundColor:"#c0392b", color:"#fff", border:"none", borderRadius:10, padding:"13px", fontSize:15, fontWeight:700, cursor:"pointer", marginTop:4 },
+
+  colRight: { padding:"16px 16px 40px", backgroundColor:"#0e0e0e", minHeight:"calc(100vh - 53px)", overflowY:"auto", position:"sticky", top:53, maxHeight:"calc(100vh - 53px)" },
+  resumenHeader:      { display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:14 },
+  resumenHeaderTitle: { color:"#fff", fontWeight:800, fontSize:15 },
+  resumenHeaderCount: { backgroundColor:"#252525", color:"#aaa", borderRadius:999, fontSize:12, fontWeight:700, padding:"2px 10px" },
+  resumenEmpty:       { color:"#444", fontSize:14, textAlign:"center", padding:"30px 0", fontStyle:"italic" },
+
+  rCard:       { borderRadius:10, border:"1px solid", padding:12, marginBottom:10, display:"flex", flexDirection:"column", gap:7, backgroundColor:"#161616", transition:"border-color 0.2s" },
+  rCardHead:   { display:"flex", justifyContent:"space-between", alignItems:"baseline" },
+  rCardNum:    { color:"#fff", fontWeight:900, fontSize:17 },
+  rCardMins:   { fontSize:11, fontWeight:600 },
+  rLinea:      { display:"flex", justifyContent:"space-between", alignItems:"center", borderRadius:6, padding:"6px 10px", gap:8, transition:"all 0.3s" },
+  rLineaNombre:{ fontSize:13, fontWeight:600 },
+  rLineaTag:   { fontSize:10, fontWeight:700, padding:"2px 8px", borderRadius:20, border:"1px solid", whiteSpace:"nowrap" },
+  btnEntregarLinea: { backgroundColor:"#1e6b3a", color:"#fff", border:"none", borderRadius:7, padding:"5px 11px", fontSize:12, fontWeight:700, cursor:"pointer", whiteSpace:"nowrap", flexShrink:0 },
+  entregadoTag:{ color:"#2a5a2a", fontSize:11, fontWeight:700, whiteSpace:"nowrap", flexShrink:0 },
+
+  kitchenPage:     { minHeight:"100vh", backgroundColor:"#0e0e0e", fontFamily:"'Segoe UI',sans-serif" },
+  kitchenBar:      { display:"flex", alignItems:"center", justifyContent:"space-between", padding:"14px 20px", backgroundColor:"#c0392b" },
+  kitchenBarTitle: { color:"#fff", fontWeight:900, fontSize:20, letterSpacing:1 },
+  kitchenBadge:    { backgroundColor:"rgba(0,0,0,0.25)", color:"#fff", borderRadius:20, padding:"4px 14px", fontSize:13, fontWeight:600 },
+  backWhite:       { background:"rgba(255,255,255,0.15)", border:"none", color:"#fff", borderRadius:8, padding:"8px 14px", cursor:"pointer", fontSize:14, fontWeight:600 },
+  kitchenGrid:     { display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(300px,1fr))", gap:16, padding:16, alignItems:"start" },
+  emptyPage:       { display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", minHeight:"60vh" },
+
+  ordenCard:   { backgroundColor:"#181818", borderRadius:12, border:"2px solid", padding:16, display:"flex", flexDirection:"column", gap:12, transition:"all 0.2s" },
+  ordenHeader: { display:"flex", justifyContent:"space-between", alignItems:"flex-start" },
+  ordenNum:    { color:"#fff", fontWeight:900, fontSize:20 },
+  ordenMins:   { fontSize:12, fontWeight:600 },
+  ordenHora:   { color:"#444", fontSize:11 },
+  lineasWrap:  { display:"flex", flexDirection:"column", gap:8 },
+  lineaRow:    { display:"flex", alignItems:"center", justifyContent:"space-between", borderRadius:9, padding:"10px 12px", gap:8, transition:"background-color 0.2s" },
+  lineaDot:    { width:9, height:9, borderRadius:"50%", flexShrink:0 },
+  lineaGrupo:  { fontSize:10, fontWeight:700, letterSpacing:0.5, textTransform:"uppercase", opacity:0.8 },
+  lineaNombre: { fontSize:15, fontWeight:600 },
+  lineaQty:    { color:"#aaa", fontWeight:700 },
+  lineaBtn:    { border:"none", color:"#fff", borderRadius:7, padding:"7px 12px", cursor:"pointer", fontSize:13, fontWeight:700, whiteSpace:"nowrap", flexShrink:0 },
+
+  // HISTORIAL
+  histPage:       { minHeight:"100vh", backgroundColor:"#0a0a0a", fontFamily:"'Segoe UI',sans-serif", paddingBottom:40 },
+  histBar:        { display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:10, padding:"14px 20px", backgroundColor:"#1a2e42", position:"sticky", top:0, zIndex:10 },
+  histBarTitle:   { color:"#fff", fontWeight:900, fontSize:18 },
+  btnBorrar:      { backgroundColor:"#c0392b", color:"#fff", border:"none", borderRadius:8, padding:"8px 16px", fontWeight:700, fontSize:13, cursor:"pointer" },
+  histResumen:    { display:"flex", gap:24, padding:"16px 20px", borderBottom:"1px solid #1a1a1a" },
+  histResumenItem:{ color:"#888", fontSize:13 },
+  histResumenNum: { color:"#fff", fontWeight:900, fontSize:22, marginRight:4 },
+  histFecha:      { color:"#2471a3", fontWeight:800, fontSize:11, letterSpacing:2, textTransform:"uppercase", padding:"16px 20px 6px" },
+  histCard:       { backgroundColor:"#141414", borderRadius:10, margin:"0 16px 10px", padding:14, border:"1px solid #1e1e1e" },
+  histCardHead:   { display:"flex", justifyContent:"space-between", alignItems:"baseline", marginBottom:10 },
+  histCardNum:    { color:"#fff", fontWeight:900, fontSize:16 },
+  histCardHora:   { color:"#555", fontSize:11 },
+  histLinea:      { display:"flex", alignItems:"center", gap:8, backgroundColor:"#1a1a1a", borderRadius:6, padding:"6px 10px", marginBottom:5 },
+  histLineaGrupo: { color:"#555", fontSize:10, fontWeight:700, textTransform:"uppercase", letterSpacing:0.5, minWidth:80 },
+  histLineaNombre:{ color:"#bbb", fontSize:13, fontWeight:600 },
+};
