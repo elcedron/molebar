@@ -1,4 +1,22 @@
-import { useState, useEffect } from "react";
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistema de Comandas</title>
+    <!-- Cargamos React y Tailwind CSS desde internet -->
+    <script src="https://unpkg.com" crossorigin></script>
+    <script src="https://unpkg.com" crossorigin></script>
+    <script src="https://unpkg.com"></script>
+    <script src="https://jsdelivr.net"></script>
+</head>
+<body class="bg-gray-900 text-white m-0 p-0">
+
+    <div id="root"></div>
+
+    <!-- Tu código de Claude va aquí adentro -->
+    <script type="text/babel">
+        import { useState, useEffect } from "react";
 
 // ─── MENÚ ─────────────────────────────────────────────────────────────────────
 const MENU = [
@@ -475,3 +493,8 @@ const s = {
   histLineaGrupo: { color:"#555", fontSize:10, fontWeight:700, textTransform:"uppercase", letterSpacing:0.5, minWidth:80 },
   histLineaNombre:{ color:"#bbb", fontSize:13, fontWeight:600 },
 };
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
