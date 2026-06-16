@@ -11,12 +11,28 @@
     <script src="https://cloudflare.com"></script>
     <!-- Estilos visuales -->
     <script src="https://tailwindcss.com"></script>
+    <!-- Enlace para cargar los iconos de Lucide automáticamente -->
+<script src="https://unpkg.com"></script>
+
 </head>
 <body class="bg-gray-900 text-white m-0 p-0">
 
     <div id="root"></div>
 
     <script type="text/babel">
+        // Truco de compatibilidad para los iconos de Claude
+const Plus = () => <span>➕</span>;
+const Trash = () => <span>🗑️</span>;
+const Trash2 = () => <span>🗑️</span>;
+const Edit = () => <span>✏️</span>;
+const Check = () => <span>✅</span>;
+const X = () => <span>❌</span>;
+const ChevronDown = () => <span>🔽</span>;
+const ChevronUp = () => <span>🔼</span>;
+const Clock = () => <span>🕒</span>;
+const Moon = () => <span>🌙</span>;
+const Sun = () => <span>☀️</span>;
+
 
 
 // ─── MENÚ ─────────────────────────────────────────────────────────────────────
